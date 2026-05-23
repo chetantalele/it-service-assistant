@@ -1,0 +1,66 @@
+swagger: "2.0"
+info:
+  title: IT Service Request API
+  version: "1.0.0"
+host: "it-service-api.endpoints.YOUR_PROJECT_ID.cloud.goog"
+x-google-backend:
+  address: "YOUR_CLOUD_RUN_URL"
+  protocol: h2
+securityDefinitions:
+  api_key:
+    type: "apiKey"
+    name: "x-api-key"
+    in: "header"
+security:
+  - api_key: []
+consumes:
+  - application/json
+produces:
+  - application/json
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      security:
+        - api_key: []
+      x-google-backend:
+        address: "YOUR_CLOUD_RUN_URL/health"
+      responses:
+        200:
+          description: OK
+        401:
+          description: Missing or invalid API key
+  /api/v1/service-request:
+    post:
+      summary: Receive service request from Retool
+      operationId: receiveServiceRequest
+      security:
+        - api_key: []
+      x-google-backend:
+        address: "YOUR_CLOUD_RUN_URL/api/v1/service-request"
+      parameters:
+        - in: body
+          name: payload
+          required: true
+          schema:
+            type: object
+            required: [user_message]
+            properties:
+              user_message:
+                type: string
+              user_id:
+                type: string
+              session_id:
+               type: string
+              timestamp:
+                type: string
+              metadata:
+                type: object
+      responses:
+        200:
+          description: Request received
+        401:
+          description: Missing or invalid API key
+        422:
+          description: Validation error

@@ -1,0 +1,30 @@
+
+Rename query to sendServiceRequest → Method: POST → URL: /api/v1/service-request
+6
+Click Body tab → select JSON → paste:
+{{
+  {
+    "user_message": userMessageInput.value,
+    "user_id": current_user.email || "anonymous",
+    "session_id": "sess_" + Math.random().toString(36).substr(2,9),
+    "timestamp": new Date().toISOString(),
+    "metadata": {
+      "retool_app": "IT Service Request Assistant",
+      "retool_user": current_user.email,
+      "phase": "phase_1"
+    }
+  }
+}}
+7
+Uncheck Run query on page load → click Save
+Wire button and display
+
+8
+Click sendButton → right panel → + Add event handler → Event: Click, Action: Trigger query, Query: sendServiceRequest
+9
+Click chatDisplay → under Content, paste:
+{{ sendServiceRequest.data
+  ? "Status: " + sendServiceRequest.data.status + "\n" +
+    "Request ID: " + sendServiceRequest.data.request_id + "\n" +
+    "Message: " + sendServiceRequest.data.message
+  : "Type your IT request and click Send." }}

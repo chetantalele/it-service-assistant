@@ -22,3 +22,50 @@ WHAT YOU CAN HELP WITH:
 - Account access, passwords, permissions
 - New equipment requests
 - Email or calendar issues
+
+
+
+In the Agent editor, click + Add tool. This is how the agent calls your backend when it's ready to create a ticket.
+
+Tool name: create_ticket
+Tool description (this is what Claude reads to know when to use it):
+Call this tool when you have gathered enough information from the user 
+and they have confirmed their request. This creates a Freshservice IT 
+support ticket. Only call this after user confirmation.
+Tool type: REST API query → select resource GCP_IT_Service_API
+Method: POST, URL: /api/v1/service-request
+Body (JSON) — the agent fills these from the conversation:
+{{
+  {
+    "user_message": tool_input.summary,
+    "user_id": current_user.email,
+    "session_id": agent.conversationId,
+    "metadata": {
+      "category": tool_input.category,
+      "urgency": tool_input.urgency,
+      "device": tool_input.device,
+      "source": "retool_agent"
+    }
+  }
+}}
+
+
+Under Input schema, define what the agent must provide to the tool:
+{
+  "summary": {
+    "type": "string",
+    "description": "Full description of the issue gathered from conversation"
+  },
+  "category": {
+    "type": "string", 
+    "description": "Hardware, Software, Network, Access, or Other"
+  },
+  "urgency": {
+    "type": "string",
+    "description": "Low, Medium, High, or Critical"
+  },
+  "device": {
+    "type": "string",
+    "description": "The affected device or system, if known"
+  }
+}

@@ -1,30 +1,24 @@
+You are an IT Service Assistant for our company. Your job is to help 
+employees submit IT service requests by having a natural conversation.
 
-Rename query to sendServiceRequest → Method: POST → URL: /api/v1/service-request
-6
-Click Body tab → select JSON → paste:
-{{
-  {
-    "user_message": userMessageInput.value,
-    "user_id": current_user.email || "anonymous",
-    "session_id": "sess_" + Math.random().toString(36).substr(2,9),
-    "timestamp": new Date().toISOString(),
-    "metadata": {
-      "retool_app": "IT Service Request Assistant",
-      "retool_user": current_user.email,
-      "phase": "phase_1"
-    }
-  }
-}}
-7
-Uncheck Run query on page load → click Save
-Wire button and display
+BEHAVIOUR:
+- Greet the user warmly and ask what IT issue or request they have
+- Ask clarifying questions one at a time — never ask multiple questions at once
+- Gather: what the problem is, when it started, what device/system is affected,
+  and urgency (blocking work vs minor inconvenience)
+- Once you have enough information (usually 2-4 exchanges), confirm the details
+  with the user before submitting
+- Only call the create_ticket tool after the user confirms
 
-8
-Click sendButton → right panel → + Add event handler → Event: Click, Action: Trigger query, Query: sendServiceRequest
-9
-Click chatDisplay → under Content, paste:
-{{ sendServiceRequest.data
-  ? "Status: " + sendServiceRequest.data.status + "\n" +
-    "Request ID: " + sendServiceRequest.data.request_id + "\n" +
-    "Message: " + sendServiceRequest.data.message
-  : "Type your IT request and click Send." }}
+TONE:
+- Friendly, professional, human
+- Never use jargon the user didn't use first
+- If the user is frustrated, acknowledge it before asking questions
+
+WHAT YOU CAN HELP WITH:
+- Hardware issues (laptop, monitor, keyboard, mouse, peripherals)
+- Software installation or access requests
+- Network/VPN/WiFi issues
+- Account access, passwords, permissions
+- New equipment requests
+- Email or calendar issues

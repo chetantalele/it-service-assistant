@@ -3,10 +3,8 @@ info:
   title: DP Service Request API
   version: "1.0.0"
 host: "dp-service-gateway-4cc9cj5l.uc.gateway.dev"
-
 x-google-backend:
   address: "https://dp-service-assistant-cd-deploy-340319339769.us-central1.run.app"
-
   protocol: h2
 securityDefinitions:
   api_key:
@@ -15,7 +13,6 @@ securityDefinitions:
     in: "header"
 security:
   - api_key: []
-
 consumes:
   - application/json
 produces:
@@ -23,49 +20,51 @@ produces:
 paths:
   /health:
     get:
-      summary: Health check
       operationId: healthCheck
       security:
         - api_key: []
       x-google-backend:
         address: "https://dp-service-assistant-cd-deploy-340319339769.us-central1.run.app/health"
-
       responses:
         200:
           description: OK
         401:
-          description: Missing or invalid API key
+          description: Unauthorized
   /api/v1/service-request:
     post:
-      summary: Receive service request from Retool
       operationId: receiveServiceRequest
       security:
         - api_key: []
       x-google-backend:
         address: "https://dp-service-assistant-cd-deploy-340319339769.us-central1.run.app/api/v1/service-request"
-
       parameters:
         - in: body
           name: payload
           required: true
           schema:
             type: object
-            required: [user_message]
+            required: [user_id, metadata]
             properties:
-              user_message:
-                type: string
               user_id:
-                type: string
-              session_id:
-                type: string
-              timestamp:
                 type: string
               metadata:
                 type: object
+                required: [domain, database, role, user_email]
+                properties:
+                  domain:
+                    type: string
+                  database:
+                    type: string
+                  role:
+                    type: string
+                  user_email:
+                    type: string
       responses:
         200:
-          description: Request received
+          description: Ticket created
         401:
-          description: Missing or invalid API key
+          description: Unauthorized
         422:
           description: Validation error
+        502:
+          description: Freshservice error

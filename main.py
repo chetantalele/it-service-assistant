@@ -8,7 +8,6 @@ import functions_framework
 from flask import request, jsonify
 from pythonjsonlogger import jsonlogger
 import requests
-from google.cloud import secretmanager
 
 # ── Logging ──────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
@@ -19,31 +18,11 @@ handler.setFormatter(jsonlogger.JsonFormatter(
 ))
 logger.addHandler(handler)
 
-# ── Secret Manager ────────────────────────────────────────────────────
-def get_secret(secret_id: str) -> str:
-    client = secretmanager.SecretManagerServiceClient()
-    project_id = os.environ.get("GCP_PROJECT_ID")
-    name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
-    response = client.access_secret_version(request={"name": name})
-    return response.payload.data.decode("UTF-8")
-
-# ── Secrets — loaded once at cold start ───────────────────────────────
-FS_API_KEY = None
-FS_DOMAIN = None
-FS_SERVICE_ITEM_ID = None
-
-def load_secrets():
-    global FS_API_KEY, FS_DOMAIN, FS_SERVICE_ITEM_ID
-    if FS_API_KEY is not None:
-        return
-    try:
-        FS_API_KEY = get_secret("freshservice-api-key")
-        FS_DOMAIN = get_secret("freshservice-domain")
-        FS_SERVICE_ITEM_ID = get_secret("freshservice-service-item-id")
-        logger.info("SECRETS_LOADED", extra={"status": "ok"})
-    except Exception as e:
-        logger.error("SECRETS_LOAD_FAILED", extra={"error": str(e)})
-        raise RuntimeError(f"Could not load secrets: {e}")
+# ── Configuration — all values hardcoded ─────────────────────────────
+# Replace each value below with your actual values
+FS_API_KEY         = "your_freshservice_api_key_here"
+FS_DOMAIN          = "yourcompany"          # just the subdomain, no .freshservice.com
+FS_SERVICE_ITEM_ID = "42"                   # number from URL when editing your form
 
 # ── CORS ──────────────────────────────────────────────────────────────
 CORS_HEADERS = {
@@ -72,7 +51,6 @@ def create_freshservice_ticket(
         f"/api/v2/service_catalog/items/{FS_SERVICE_ITEM_ID}/place_request"
     )
 
-    # Exact payload that Postman confirmed working — nothing extra
     payload = {
         "email": requester_email,
         "quantity": 1,
@@ -123,17 +101,11 @@ def entry_point(req):
             resp.headers[k] = v
         return resp, 204
 
-    # Load secrets on first request
-    try:
-        load_secrets()
-    except RuntimeError:
-        return make_response({"error": "Service configuration error"}, 503)
-
     # GET /health
     if req.method == "GET" and req.path in ("/health", "/"):
         return make_response({
             "status": "healthy",
-            "freshservice_configured": FS_API_KEY is not None,
+            "freshservice_configured": bool(FS_API_KEY),
             "timestamp": datetime.now(timezone.utc).isoformat()
         }, 200)
 
@@ -144,8 +116,8 @@ def entry_point(req):
         if not body:
             return make_response({"error": "JSON body required"}, 400)
 
-        # Extract only the 4 fields — nothing else
-        metadata = body.get("metadata") or {}
+        # Extract the 4 fields
+        metadata   = body.get("metadata") or {}
         domain     = (metadata.get("domain") or "").strip()
         database   = (metadata.get("database") or "").strip()
         role       = (metadata.get("role") or "").strip()
@@ -170,7 +142,9 @@ def entry_point(req):
             }, 422)
 
         if not requester:
-            return make_response({"error": "user_id (requester email) is required"}, 422)
+            return make_response(
+                {"error": "user_id (requester email) is required"}, 422
+            )
 
         rid = str(uuid.uuid4())
 
@@ -192,7 +166,6 @@ def entry_point(req):
                 user_email=user_email
             )
 
-            # Freshservice returns the ticket under service_request key
             ticket = fs_response.get("service_request", {})
             ticket_id = ticket.get("id", "N/A")
 
@@ -235,6 +208,8 @@ def entry_point(req):
                 "request_id": rid,
                 "error": str(e)
             })
-            return make_response({"error": "Unexpected error", "request_id": rid}, 500)
+            return make_response(
+                {"error": "Unexpected error", "request_id": rid}, 500
+            )
 
     return make_response({"error": "Route not found"}, 404)

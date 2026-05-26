@@ -1,71 +1,120 @@
-You are an IT Service Assistant for our company. Your job is to help 
-employees submit IT service requests by having a natural conversation.
+You are ARIA (AI Request & Issue Assistant), the DP Service Assistant.
+You help employees submit database access requests through conversation.
 
-BEHAVIOUR:
-- Greet the user warmly and ask what IT issue or request they have
-- Ask clarifying questions one at a time — never ask multiple questions at once
-- Gather: what the problem is, when it started, what device/system is affected,
-  and urgency (blocking work vs minor inconvenience)
-- Once you have enough information (usually 2-4 exchanges), confirm the details
-  with the user before submitting
-- Only call the create_ticket tool after the user confirms
+## YOUR BEHAVIOUR
+- Speak like a helpful colleague — warm, professional, concise
+- Ask exactly ONE question per message — never combine questions
+- Never assume or make up field values — always ask
+- Never ask for information already given in the conversation
 
-TONE:
-- Friendly, professional, human
-- Never use jargon the user didn't use first
-- If the user is frustrated, acknowledge it before asking questions
+## WHAT YOU COLLECT
+For every database access request you must collect exactly these 4 fields:
 
-WHAT YOU CAN HELP WITH:
-- Hardware issues (laptop, monitor, keyboard, mouse, peripherals)
-- Software installation or access requests
-- Network/VPN/WiFi issues
-- Account access, passwords, permissions
-- New equipment requests
-- Email or calendar issues
+1. DOMAIN — Which domain? (e.g. CORP, APAC, EU)
+2. DATABASE — Which database? (e.g. ProductionDB, SalesDB)
+3. ROLE — What access level?
+   Offer these options exactly: Read Only, Read Write, Admin, Data Analyst, Developer
+4. USER EMAIL — Email of the person who needs access
+   Note: this may be different from the person making the request — always confirm
+
+## YOUR WORKFLOW
+Step 1 — Greet the user and ask what they need
+Step 2 — Confirm it is a database access request
+Step 3 — Collect the 4 fields one at a time
+Step 4 — Summarise: "Just to confirm — [role] access to [database] on [domain] for [user_email]. Shall I go ahead?"
+Step 5 — Wait for explicit confirmation (yes / ok / go ahead / proceed)
+Step 6 — Call create_ticket tool ONLY after confirmation
+Step 7 — Tell the user the ticket number from the response
+
+## STRICT RULES
+- NEVER call create_ticket before the user explicitly confirms
+- NEVER call create_ticket if any of the 4 fields is missing
+- NEVER ask for anything other than these 4 fields
+- If the user wants to change something after the summary, update it and re-confirm before calling the tool
 
 
 
-In the Agent editor, click + Add tool. This is how the agent calls your backend when it's ready to create a ticket.
 
-Tool name: create_ticket
-Tool description (this is what Claude reads to know when to use it):
-Call this tool when you have gathered enough information from the user 
-and they have confirmed their request. This creates a Freshservice IT 
-support ticket. Only call this after user confirmation.
-Tool type: REST API query → select resource GCP_IT_Service_API
-Method: POST, URL: /api/v1/service-request
-Body (JSON) — the agent fills these from the conversation:
+
+In the left panel scroll down to Tools section → click + Add tool
+2
+Select Resource query → select resource GCP_DP_Service_API
+Basic tool settings
+Tool name
+create_ticket — lowercase, underscore, exactly this
+Method
+POST
+URL path
+/api/v1/service-request
+Body type
+JSON
+3
+In the Description field paste this — ARIA reads this to know when to call the tool:
+Creates a database access request ticket in Freshservice.
+Call this tool ONLY when ALL of these are true:
+1. You have collected all 4 fields: domain, database, role, user_email
+2. You have summarised the request back to the user
+3. The user has explicitly confirmed with yes, ok, or proceed
+Do NOT call before confirmation under any circumstances.
+
+
+
+
+Find the Input schema or Parameters section in the tool editor
+Switch to JSON view if available and paste this:
+
+{
+  "type": "object",
+  "required": ["domain", "database", "role", "user_email"],
+  "properties": {
+    "domain": {
+      "type": "string",
+      "description": "The AD domain. Examples: CORP, APAC, EU. Confirmed by user."
+    },
+    "database": {
+      "type": "string",
+      "description": "Database name. Examples: ProductionDB, SalesDB. Confirmed by user."
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "Viewer",
+        "Admin",
+        "Developer"
+      ],
+      "description": "Access role. Must be exactly one of the enum values."
+    },
+    "user_email": {
+      "type": "string",
+      "description": "Email of person who needs access. Confirmed by user."
+    }
+  }
+}
+
+
+Find the Body section in the tool editor → make sure it is set to JSON mode
+Paste this exactly — these are the only fields your Cloud Function needs:
 {{
   {
-    "user_message": tool_input.summary,
     "user_id": current_user.email,
-    "session_id": agent.conversationId,
     "metadata": {
-      "category": tool_input.category,
-      "urgency": tool_input.urgency,
-      "device": tool_input.device,
-      "source": "retool_agent"
+      "domain": tool_input.domain,
+      "database": tool_input.database,
+      "role": tool_input.role,
+      "user_email": tool_input.user_email
     }
   }
 }}
-
-
-Under Input schema, define what the agent must provide to the tool:
-{
-  "summary": {
-    "type": "string",
-    "description": "Full description of the issue gathered from conversation"
-  },
-  "category": {
-    "type": "string", 
-    "description": "Hardware, Software, Network, Access, or Other"
-  },
-  "urgency": {
-    "type": "string",
-    "description": "Low, Medium, High, or Critical"
-  },
-  "device": {
-    "type": "string",
-    "description": "The affected device or system, if known"
-  }
-}
+What each line does
+user_id
+Retool logged-in user email — becomes the Freshservice requester
+metadata.domain
+→ custom_fields.domain in Freshservice
+metadata.database
+→ custom_fields.database in Freshservice
+metadata.role
+→ custom_fields.role in Freshservice
+metadata.user_email
+→ custom_fields.user_email in Freshservice
+3
+Click Save on the tool

@@ -3,14 +3,14 @@ import sys
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
 
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+import functions_framework
+from flask import request, jsonify
 from pythonjsonlogger import jsonlogger
+import requests
+from google.cloud import secretmanager
 
+# ── Logging ──────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 handler = logging.StreamHandler(sys.stdout)
@@ -19,83 +19,222 @@ handler.setFormatter(jsonlogger.JsonFormatter(
 ))
 logger.addHandler(handler)
 
-app = FastAPI(
-    title="IT Service Assistant",
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None
-)
+# ── Secret Manager ────────────────────────────────────────────────────
+def get_secret(secret_id: str) -> str:
+    client = secretmanager.SecretManagerServiceClient()
+    project_id = os.environ.get("GCP_PROJECT_ID")
+    name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
+    response = client.access_secret_version(request={"name": name})
+    return response.payload.data.decode("UTF-8")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://garage.dev.retool.colpal.cloud"],
-    allow_credentials=True,
-    allow_methods=["POST", "GET", "OPTIONS"],
-    allow_headers=["*"]
-)
+# ── Secrets — loaded once at cold start ───────────────────────────────
+FS_API_KEY = None
+FS_DOMAIN = None
+FS_SERVICE_ITEM_ID = None
 
-class Payload(BaseModel):
-    user_message: str = Field(..., min_length=1, max_length=5000)
-    user_id: Optional[str] = None
-    session_id: Optional[str] = None
-    timestamp: Optional[str] = None
-    metadata: Optional[dict] = {}
-    # Agent fills these inside metadata automatically:
-    # metadata.get("category") → "Hardware", "Software", "Network" etc
-    # metadata.get("urgency")  → "Low", "Medium", "High", "Critical"
-    # metadata.get("device")   → "MacBook Pro", "Windows laptop" etc
-    # metadata.get("source")   → "retool_agent"
+def load_secrets():
+    global FS_API_KEY, FS_DOMAIN, FS_SERVICE_ITEM_ID
+    if FS_API_KEY is not None:
+        return
+    try:
+        FS_API_KEY = get_secret("freshservice-api-key")
+        FS_DOMAIN = get_secret("freshservice-domain")
+        FS_SERVICE_ITEM_ID = get_secret("freshservice-service-item-id")
+        logger.info("SECRETS_LOADED", extra={"status": "ok"})
+    except Exception as e:
+        logger.error("SECRETS_LOAD_FAILED", extra={"error": str(e)})
+        raise RuntimeError(f"Could not load secrets: {e}")
 
-@app.get("/health")
-async def health():
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    }
+# ── CORS ──────────────────────────────────────────────────────────────
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "https://garage.dev.retool.colpal.cloud",
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    "Access-Control-Allow-Headers": "*"
+}
 
-@app.post("/api/v1/service-request")
-async def receive(payload: Payload, request: Request):
-    rid = str(uuid.uuid4())
+def make_response(data, status_code):
+    resp = jsonify(data)
+    for k, v in CORS_HEADERS.items():
+        resp.headers[k] = v
+    return resp, status_code
 
-    urgency_map = {
-        "Low": 1,
-        "Medium": 2,
-        "High": 3,
-        "Critical": 4
-    }
-    priority = urgency_map.get(
-        payload.metadata.get("urgency", "Medium"), 2
+# ── Freshservice API call ─────────────────────────────────────────────
+def create_freshservice_ticket(
+    requester_email: str,
+    domain: str,
+    database: str,
+    role: str,
+    user_email: str
+) -> dict:
+
+    url = (
+        f"https://{FS_DOMAIN}.freshservice.com"
+        f"/api/v2/service_catalog/items/{FS_SERVICE_ITEM_ID}/place_request"
     )
 
-    logger.info("AGENT_REQUEST_RECEIVED", extra={
-        "request_id": rid,
-        "user_message": payload.user_message,
-        "user_id": payload.user_id,
-        "session_id": payload.session_id,
-        "category": payload.metadata.get("category"),
-        "urgency": payload.metadata.get("urgency"),
-        "device": payload.metadata.get("device"),
-        "source": payload.metadata.get("source"),
-        "source_ip": request.client.host if request.client else "unknown"
+    # Exact payload that Postman confirmed working — nothing extra
+    payload = {
+        "email": requester_email,
+        "quantity": 1,
+        "custom_fields": {
+            "domain": domain,
+            "database": database,
+            "role": role,
+            "user_email": user_email
+        }
+    }
+
+    logger.info("FRESHSERVICE_SENDING", extra={
+        "url": url,
+        "requester_email": requester_email,
+        "domain": domain,
+        "database": database,
+        "role": role,
+        "user_email": user_email
     })
 
-    return {
-        "request_id": rid,
-        "status": "received",
-        "message": f"Ticket will be created. ID: {rid}",
-        "priority_mapped": priority,
-        "server_timestamp": datetime.now(timezone.utc).isoformat(),
-        "phase": "phase_1"
-    }
-
-@app.exception_handler(422)
-async def val_err(request: Request, exc):
-    return JSONResponse(
-        status_code=422,
-        content={"error": "user_message field is required"}
+    response = requests.post(
+        url,
+        json=payload,
+        auth=(FS_API_KEY, "X"),
+        timeout=15
     )
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    logger.info("FRESHSERVICE_RESPONSE", extra={
+        "status_code": response.status_code,
+        "body": response.text[:500]
+    })
+
+    if response.status_code not in (200, 201):
+        raise RuntimeError(
+            f"Freshservice returned {response.status_code}: {response.text}"
+        )
+
+    return response.json()
+
+# ── Entry point ───────────────────────────────────────────────────────
+@functions_framework.http
+def entry_point(req):
+
+    # CORS preflight
+    if req.method == "OPTIONS":
+        resp = jsonify({})
+        for k, v in CORS_HEADERS.items():
+            resp.headers[k] = v
+        return resp, 204
+
+    # Load secrets on first request
+    try:
+        load_secrets()
+    except RuntimeError:
+        return make_response({"error": "Service configuration error"}, 503)
+
+    # GET /health
+    if req.method == "GET" and req.path in ("/health", "/"):
+        return make_response({
+            "status": "healthy",
+            "freshservice_configured": FS_API_KEY is not None,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }, 200)
+
+    # POST /api/v1/service-request
+    if req.method == "POST" and req.path == "/api/v1/service-request":
+
+        body = req.get_json(silent=True)
+        if not body:
+            return make_response({"error": "JSON body required"}, 400)
+
+        # Extract only the 4 fields — nothing else
+        metadata = body.get("metadata") or {}
+        domain     = (metadata.get("domain") or "").strip()
+        database   = (metadata.get("database") or "").strip()
+        role       = (metadata.get("role") or "").strip()
+        user_email = (metadata.get("user_email") or "").strip()
+        requester  = (body.get("user_id") or "").strip()
+
+        # Validate all 4 are present
+        missing = [
+            f for f, v in {
+                "domain": domain,
+                "database": database,
+                "role": role,
+                "user_email": user_email
+            }.items() if not v
+        ]
+
+        if missing:
+            logger.warning("MISSING_FIELDS", extra={"missing": missing})
+            return make_response({
+                "error": f"Missing fields: {', '.join(missing)}",
+                "hint": "Agent must collect all 4 fields before calling this endpoint"
+            }, 422)
+
+        if not requester:
+            return make_response({"error": "user_id (requester email) is required"}, 422)
+
+        rid = str(uuid.uuid4())
+
+        logger.info("TICKET_REQUEST_RECEIVED", extra={
+            "request_id": rid,
+            "requester": requester,
+            "domain": domain,
+            "database": database,
+            "role": role,
+            "user_email": user_email
+        })
+
+        try:
+            fs_response = create_freshservice_ticket(
+                requester_email=requester,
+                domain=domain,
+                database=database,
+                role=role,
+                user_email=user_email
+            )
+
+            # Freshservice returns the ticket under service_request key
+            ticket = fs_response.get("service_request", {})
+            ticket_id = ticket.get("id", "N/A")
+
+            logger.info("TICKET_CREATED", extra={
+                "request_id": rid,
+                "ticket_id": ticket_id,
+                "requester": requester
+            })
+
+            return make_response({
+                "request_id": rid,
+                "status": "ticket_created",
+                "ticket_id": ticket_id,
+                "ticket_url": (
+                    f"https://{FS_DOMAIN}.freshservice.com"
+                    f"/helpdesk/tickets/{ticket_id}"
+                ),
+                "message": (
+                    f"Ticket #{ticket_id} raised successfully. "
+                    f"{role} access to {database} on {domain} domain "
+                    f"for {user_email} has been submitted. "
+                    f"An email confirmation will be sent shortly."
+                ),
+                "phase": "phase_2"
+            }, 200)
+
+        except RuntimeError as e:
+            logger.error("FRESHSERVICE_FAILED", extra={
+                "request_id": rid,
+                "error": str(e)
+            })
+            return make_response({
+                "error": "Failed to create Freshservice ticket",
+                "request_id": rid,
+                "hint": "Check GCP logs for FRESHSERVICE_RESPONSE entry"
+            }, 502)
+
+        except Exception as e:
+            logger.error("UNEXPECTED_ERROR", extra={
+                "request_id": rid,
+                "error": str(e)
+            })
+            return make_response({"error": "Unexpected error", "request_id": rid}, 500)
+
+    return make_response({"error": "Route not found"}, 404)
